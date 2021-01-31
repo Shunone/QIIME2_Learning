@@ -1,0 +1,58 @@
+    2  conda activate qiime2-2020.11
+    4  mkdir FMT
+    5  cd FMT
+    
+    6  #序列质控评估，本次想对拆分后的每组样本分别进行单端去噪。因为是两次运行的结果，因此尽量为两次分析使用相同的--p-trunc-len 和--p-trim-left参数值。只有基于相同参数进行分析才有意义，否则多变量容易导致混淆
+    7  #样本拆分结果统计
+    8  qiime demux summarize --i-data 1_demuxed/fmt-tutorial-demux-1.qza --o-visualization 1_demuxed/demux-summary-1.qzv
+    9  qiime demux summarize --i-data 1_demuxed/fmt-tutorial-demux-2.qza --o-visualization 1_demuxed/demux-summary-2.qzv
+   10  #查看统计结果，确定去噪的参数 
+   11  mkdir 2_QC
+   12  #通过结果，发现13-150bp之间的序列质量分数较好，因此选择该区间
+   13  #生成特征表和代表性序列。由于有两批数据，需要分两次处理
+   14  qiime dada2 denoise-single --p-trim-left 13 --p-trunc-len 150 --i-demultiplexed-seqs 1_demuxed/fmt-tutorial-demux-1.qza --o-representative-sequences 2_QC/rep-seqs-1.qza --o-table 2_QC/table-1.qza --o-denoising-stats 2_QC/stats-1.qza
+   16  qiime dada2 denoise-single --p-trim-left 13 --p-trunc-len 150 --i-demultiplexed-seqs 1_demuxed/fmt-tutorial-demux-2.qza --o-representative-sequences 2_QC/rep-seqs-2.qza --o-table 2_QC/table-2.qza --o-denoising-stats 2_QC/stats-2.qza
+   17  #查看去噪过程统计
+   18  qiime metadata tabulate --m-input-file 2_QC/stats-1.qza --o-visualization 2_QC/denoising-stats-1.qzv
+   19  qiime metadata tabulate --m-input-file 2_QC/stats-2.qza --o-visualization 2_QC/denoising-stats-2.qzv
+   
+   20  #合并不同批的代表序列和特征表
+   21  mkdir 3_merged
+   22* qiime feature-table merge-seqs --i-tables 2_QC/table-1.qza --i-tables 2_QC/table-2.qza --o-merged-table 3_merged/table.qza
+   23  #也可以合并更多批次的数据，只需要使用更多的--i-table参数即可
+   24  #合并两组数据的代表序列
+   25  qiime feature-table merge-seqs --i-data 2_QC/rep-seqs-1.qza --i-data 2_QC/rep-seqs-2.qza --o-merged-data 3_merged/rep-seqs.qza
+   26  #特征表统计可视化
+   27  qiime feature-table summarize --i-table 3_merged/table.qza --o-visualization 3_merged/table.qzv --m-sample-metadata-file sample-metadata.tsv 
+   28  #代表序列统计
+   29  qiime feature-table tabulate-seqs --i-data 3_merged/rep-seqs.qza --o-visualization 3_merged/rep-seqs.qzv
+   
+   30  #按个体(subject-id)分类是否存在组成差异？
+   31  #要考虑个体间是否存在差异，一般查看Bray-Curtis距离下的beta多样性
+   32  mkdir 4_phylogenetic
+   33  #构建进化树用于多样性分析
+   34  qiime phylogeny align-to-tree-mafft-fasttree --i-sequences 3_merged/rep-seqs.qza --o-alignment 4_phylogenetic/aligned-rep-seqs.qza --o-masked-alignment 4_phylogenetic/masked-aligned-rep-seqs.qza --o-tree 4_phylogenetic/unrooted-tree.qza --o-rooted-tree 4_phylogenetic/rooted-tree.qza
+   35  #Alpha和beta多样性分析，选择合适的抽样数量，观察table.qzv，发现倒数第二的数值是1150
+   36  qiime diversity core-metrics-phylogenetic --i-phylogeny 4_phylogenetic/rooted-tree.qza --i-table 3_merged/table.qza --p-sampling-depth 1150 --m-metadata-file sample-metadata.tsv --output-dir 5_core-metrics-results
+   37  #查看bray_curtis_emperor.qzv,着色选择subject-id,观察不同颜色之间是否有明显分开的趋势
+  
+   38  #按个体分类存在丰度/均匀度差异吗？
+   39  #需要统计subject-id组间丰富度(observed_otus/richness)和均匀度(evenness)的差异显著情况。默认计算sample—metadata.tsv中全部分组情况
+   40  #Alpha多样性subject组间显著性分析和可视化
+   41  qiime diversity alpha-group-significance --i-alpha-diversity 5_core-metrics-results/observed_features_vector.qza --m-metadata-file sample-metadata.tsv --o-visualization 5_core-metrics-results/observed_features_group-significance.qzv
+   42  qiime diversity alpha-group-significance --i-alpha-diversity 5_core-metrics-results/evenness_vector.qza --m-metadata-file sample-metadata.tsv --o-visualization 5_core-metrics-results/evenness_group-significance.qzv
+   43  #查看observed-otus-group-significance.qzv,column切换到subject-id查看个体间丰富度的比对箱线图。是否显著看图下的表格
+   44  #观察到从整体上，p值不显著，仅部分个体之间存在差异
+ 
+   45  #菌群移植在时间上的beta多样性
+   46  #移植几周后，菌群在unweighted unifrac距离下最像供体？
+   47  #移植几周后，菌群在Bray-curtis距离下最像供体?
+   48  #这两个问题，主要是分析unweighted_unifrac和bray-curtis距离在主轴和时间变量上的变化
+   49  qiime emperor plot --i-pcoa 5_core-metrics-results/unweighted_unifrac_pcoa_results.qza --m-metadata-file sample-metadata.tsv --p-custom-axes week --o-visualization 5_core-metrics-results/unweighted_unifrac_emperor-week.qzv
+   50  qiime emperor plot --i-pcoa 5_core-metrics-results/bray_curtis_pcoa_results.qza --m-metadata-file sample-metadata.tsv --p-custom-axes week --o-visualization 5_core-metrics-results/bray-curtis-emperor-week.qzv
+   51  #通常情况下Bray-curtis更好解释，且更有意义
+
+   52  #通过稀疏曲线进一步评估样本测序量是否饱和
+   53  #Alpha稀疏曲线
+   54  mkdir 6_alpha_index
+   55  qiime diversity alpha-rarefaction --i-table 3_merged/table.qza --i-phylogeny 4_phylogenetic/rooted-tree.qza --p-max-depth 5000 --m-metadata-file sample-metadata.tsv --o-visualization 6_alpha_index/alpha-rarefaction.qzv
