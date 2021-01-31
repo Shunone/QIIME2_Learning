@@ -1,0 +1,97 @@
+    1  history
+    2  clean
+    3  clear
+    4  conda -env
+    5  conda info --envs
+    6  source activate qiime2-2020.11
+    7  ls
+    8  cd qiime2/
+    9  source activate qiime2-2020.11
+   10  conda activate qiime2-2020.11
+   11  sudo git
+   12  mkdir mygit
+   13  cd mygit/
+   14  su
+   15  cd mygit
+   16  mkdir moving-pictures
+   17  ls
+   18  cd moving-pictures/
+   19  #导入数据，生成qiime2要求的对象
+   20  time qiime tools import --type EMPSingleEndSequences --input-path emp-single-end-sequences --output-path emp-single-end-sequences.qza
+   21  conda activate qiime2-2020.11
+   22  time qiime tools import --type EMPSingleEndSequences --input-path emp-single-end-sequences --output-path emp-single-end-sequences.qza
+   23  #拆分样品
+   24  mkdir demuxed
+   25  time qiime demux emp-single --i-seqs emp-single-end-sequences.qza --m-barcodes-file sample-metadata.tsv --m-barcodes-column BarcodeSequence --o-per-sample-sequences 1_demuxed/demux.qza --o-error-correction-details 1_demuxed/demux_details.qza
+   26  #查看样品拆分的结果
+   27  time qiime demux summarize --i-data 1_demuxed/demux.qza --o-visualization 1_demuxed/demux.qzv
+   28  #qiime tools view 1_demuxed/demux.qZv #查看拆分统计结果
+   29  #序列质控和生成特征表
+   30  #有DADA2和Deblur两种方法，下面一次演示。推荐使用DADA2
+   31  mkdir 2_QC
+   32  #方法一DADA2
+   33  time qiime dada2 denoise-single --i-demultiplexed-seqs 1_demuxed/demux.qza --p-trim-left 0 --p-trunc-len 120 --o-representative-sequences 2_QC/rep-seqs-dada2.qza --o-table 2_QC/table-dada2.qza --o-denoising-stats 2_QC/stats-dada2.qza
+   34  #stats-dada2.qza 是计算统计结果，table-dada2.qza 是特征表，rep-seqs-dada2.qza 是代表序列
+   35  #对特征表统计进行可视化
+   36  qiime metadata tabulate --m-input-file 2_QC/stats-dada2.qza --o-visualization 2_QC/stats-dada2.qzv
+   37  #将上面生成的两个文件更名，方便后续使用。因为后面还会使用Dablur再生成一些文件
+   38  mv 2_QC/rep-seqs-dada2.qza rep-seqs.qza
+   39  mv 2_QC/rep-seqs-dada2.qza 2_QC/rep-seqs.qza
+   40  mv 2_QC/table-dada2.qza 2_QC/table.qza
+   41  #方法二：Deblur
+   42  #首先，应用基于质量分数的初始质量过滤过程
+   43  #按测序碱基质量过滤序列
+   44  time qiime quality-filter q-score --i-demux 1_demuxed/demux.qza --o-filtered-sequences 2_QC/demux-filtered.qza --o-filter-stats 2_QC/demux-filter-stats.qza
+   45  #使用qiime deblur denoise-16S来进行去噪，deblur运行的最大缺点就是慢
+   46  time qiime deblur denoise-16S --i-demultiplexed-seqs 2_QC/demux-filtered.qza --p-trim-length 120 --o-representative-sequences 2_QC/rep-seqs-deblur.qza --o-table 2_QC/table-deblur.qza --p-sample-stats --o-stats 2_QC/deblur-stats.qza
+   47  # 可视化两种命令下的对象
+   48  qiime metadata tabulate --m-input-file 2_QC/demux-filter-stats.qza --o-visualization 2_QC/demux-filter-stats.qzv
+   49  qiime deblur visualize-stats --i-deblur-stats 2_QC/deblur-stats.qza --o-visualization 2_QC/deblur-stats.qzv
+   50  #特征表和特征序列汇总
+   51  qiime feature-table summarize --i-table 2_QC/table.qza --o-visualization 2_QC/table.qzv --m-sample-metadata-file sample-metadata.tsv 
+   52  qiime feature-table tabulate-seqs --i-data 2_QC/rep-seqs.qza --o-visualization 2_QC/rep-seqs.qzv
+   53  #构建进化树用于多样性分析
+   54  mkdir 3_phylogenetic
+   55  time qiime phylogeny align-to-tree-mafft-fasttree --i-sequences 2_QC/rep-seqs.qza --o-alignment 3_phylogenetic/aligned-rep-seqs.qza --o-masked-alignment 3_phylogenetic/masked-aligned-rep-seqs.qza --o-tree 3_phylogenetic/unrooted-tree.qza --o-rooted-tree 3_phylogenetic/rooted-tree.qza
+   56  #结果说明：aligned-rep-seqs.qza 多序列比对结果；masked-aligned-rep-seqs.qza 过滤去除高变区后的多序列比对结果；rooted-tree.qza 有根树，用于多样性分析；unrooted-tree.qza 无根树
+   57  #Alpha和beta多样性分析
+   58  #需要提供给这个脚本一个重要参数--p-sampling-depth,指定重采样深度。一般选择倒数第二小的值，保留了大部分样品用于分析。尽量选择高的值
+   59  #计算核心多样性
+   60  time qiime diversity core-metrics-phylogenetic --i-phylogeny 3_phylogenetic/rooted-tree.qza --i-table 2_QC/table.qza --p-sampling-depth 962 --m-metadata-file sample-metadata.tsv --output-dir 4_core-metrics-results
+   61  #测试分类元数据列和alpha多样性数据之间的关系。这里为faith系统发育多样性(群体丰富度的度量)和Evenness均匀度进行可视化操作
+   62  #Alpha多样性组间显著性分析和可视化
+   63  qiime diversity alpha-group-significance --i-alpha-diversity 4_core-metrics-results/faith_pd_vector.qza --m-metadata-file sample-metadata.tsv --o-visualization 4_core-metrics-results/faith_pd_group-significance.qzv
+   64  qiime diversity alpha-group-significance --i-alpha-diversity 4_core-metrics-results/evenness_vector.qza --m-metadata-file sample-metadata.tsv --o-visualization 4_core-metrics-results/evenness_-group-significance.qzv
+   65  #使用PERMANOVA方法 beta-group-significance 分析分类型元数据的样本组间差异
+   66  #本次在特定列上运行该命令
+   68  time qiime diversity beta-group-significance --i-distance-matrix 4_core-metrics-results/unweighted_unifrac_distance_matrix.qza --m-metadata-file sample-metadata.tsv --m-metadata-column BodySite --o-visualization 4_core-metrics-results/unweighted_unifrac_body-site-significance.gzv --p-pairwise
+   69  time qiime diversity beta-group-significance --i-distance-matrix 4_core-metrics-results/unweighted_unifrac_distance_matrix.qza --m-metadata-file sample-metadata.tsv --m-metadata-column Subject --o-visualization 4_core-metrics-results/unweighted_unifrac_subject-group-significance.qzv --p-pairwise
+   70  #采用未加权的Unifrac和Bray-Curtis的PCoA结果生成Emperor图
+   71  qiime emperor plot --i-pcoa 4_core-metrics-results/unweighted_unifrac_pcoa_results.qza --m-metadata-file sample-metadata.tsv --p-custom-axes days-since-experiment-start --o-visualization 4_core-metrics-results/unweighted_unifrac_emperor-days-since-experiment-start.qzv
+   72  qiime emperor plot --i-pcoa 4_core-metrics-results/unweighted_unifrac_pcoa_results.qza --m-metadata-file sample-metadata.tsv --p-custom-axes DaysSinceExperimentStart --o-visualization 4_core-metrics-results/unweighted_unifrac_emperor-days-since-experiment-start.qzv
+   73  qiime emperor plot --i-pcoa 4_core-metrics-results/bray_curtis_pcoa_results.qza --m-metadata-file sample-metadata.tsv --p-custom-axes DaysSinceExperimentStart --o-visualization 4_core-metrics-results/bray_curtis_emperor-days-since-experiment-start.qzv
+   74  #Alpha稀疏曲线
+   75  #本节中，使用qiime diversity alpha-rarefaction可视化工具来探索a多样性与采样深度的关系
+   76  mkdir 5_Alpha_index
+   77  time qiime diversity alpha-rarefaction --i-table 2_QC/table.qza --i-phylogeny 3_phylogenetic/rooted-tree.qza --p-max-depth 4000 --m-metadata-file sample-metadata.tsv --o-visualization 5_Alpha_index/alpha-rarefaction.qzv
+   78  #上述中的--p-max-depth 参数4000。这个参数可以通过查看table.qzv得到，数据是frequency per sample 表中的median frequency
+   79  #物种组成分析
+   80  #使用已经训练好的Greengenes 13_8 99% OTU。后面可以根据需要自己去训练自己的物种分类器
+   81  #物种注释和可视化
+   82  time qiime feature-classifier classify-sklearn --i-classifier gg-13-8-99-515-806-nb-classifier.qza --i-reads 2_QC/rep-seqs.qza --o-classification 6_Taxonomy/taxonomy.qza
+   83  mkdir 6_Taxonomy
+   84  qiime metadata tabulate --m-input-file 6_Taxonomy/taxonomy.qza --o-visualization 6_Taxonomy/taxonomy.qzv
+   85  qiime taxa barplot --i-table 2_QC/table.qza --i-taxonomy 6_Taxonomy/taxonomy.qza --m-metadata-file sample-metadata.tsv --o-visualization 6_Taxonomy/taxa-bar-plot.qzv
+   86  #使用ANCOM差异丰度分析
+   87  #首先创建一个只包含肠道样本的特征表
+   88  mkdir 7_different
+   89  qiime feature-table filter-samples --i-table 2_QC/table.qza --m-metadata-file sample-metadata.tsv --p-where "[BodySite]='gut'" --o-filtered-table 7_different/gut-table.qza
+   90  #ANCOM不能容忍零，因此需要添加伪计数add-pseudocount
+   91  qiime composition add-pseudocount --i-table 7_different/gut-table.qza --o-composition-table 7_different/comp-gut-table.qza
+   92  #接下来可用ANCOM对两组的特征进行丰度差异的比较了
+   93  time qiime composition ancom --i-table 7_different/comp-gut-table.qza --m-metadata-file sample-metadata.tsv --m-metadata-column Subject --o-visualization 7_different/ancom-subject.qzv
+   94  #在自己感兴趣的分类级别上折叠FeatureTable[Frequency]中的特性。本次折叠到属的级别
+   95  qiime taxa collapse --i-table 7_different/gut-table.qza --i-taxonomy 6_Taxonomy/taxonomy.qza --p-level 6 --o-collapsed-table 7_different/gut-table-l6.qza
+   96  qiime composition add-pseudocount --i-table 7_different/gut-table-l6.qza --o-composition-table 7_different/comp-gut-table-l6.qza
+   98  qiime composition ancom --i-table 7_different/comp-gut-table-l6.qza --m-metadata-file sample-metadata.tsv --m-metadata-column Subject --o-visualization 7_different/l6-ancom-subject.qzv
+   99  history > Moving_picture.txt
