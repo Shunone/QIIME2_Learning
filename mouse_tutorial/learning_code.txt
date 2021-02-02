@@ -1,0 +1,123 @@
+   60  conda activate qiime2-2020.11
+   62  mkdir -p mouse_tutorial
+   63  cd mouse_tutorial/
+   
+   64  #下载文件清单
+   65  wget -c   -O "manifest.tsv"   "https://data.qiime2.org/2020.2/tutorials/pd-mice/manifest"
+   66  #下载序列压缩包
+   67  wget -c   -O "demultiplexed_seqs.zip"   "https://data.qiime2.org/2020.2/tutorials/pd-mice/demultiplexed_seqs.zip"
+   68  #解压序列数据
+   69  unzip demultiplexed_seqs.zip 
+   70  head -n3 manifest.tsv 
+   
+   71  #使用文件清单导入数据生成对象qza文件
+   72  #本次使用的是拆分后的单端序列数据，因此格式为SampleData[SequencesWithQuality]。如果是双端序列，则是SampleData[PairedEndSequencesWithQuality]
+   73  qiime tools import --type "SampleData[SequencesWithQuality]" --input-format SingleEndFastqManifestPhred33V2 --input-path ./manifest.tsv --output-path ./demux_seqs.qza
+   74  #查看样本序列统计结果
+   75  qiime demux summarize \
+
+   76  #序列质量控制和特征表
+   77  mkdir 2_QC
+   78  #通过查看序列质量，我们发现质量得分在测序运行中相对均匀分布，因此我们使用完整的150bp
+   79  qiime dada2 denoise-single --i-demultiplexed-seqs demux_seqs.qza --p-trunc-len 150 --o-table 2_QC/dada2_table.qza --o-representative-sequences 2_QC/dada2_rep_set.qza --o-denoising-stats 2_QC/dada2_stats.qza
+   80  #可视化统计结果
+   81  qiime metadata tabulate --m-input-file 2_QC/dada2_stats.qza --o-visualization 2_QC/dada2_stats.qzv
+   82  #特征表摘要
+  104  qiime feature-table summarize --i-table 2_QC/dada2_table.qza --m-sample-metadata-file metadata.tsv --o-visualization 2_QC/dada2_table.qzv
+   85  #去噪后各样本剩下的特征数可以在dada2_table.qzv中查看。各样本去噪前后的feature数可以在dada2_stats.qzv中查看。通过控制dada2_table.qzv中sampling-depth可以查看低于指定特征数的样本有多少，在feature Detail中可以查看各个feature在多少个样品中出现；通过比对dada2_table.qzv和dada2_stats.qzv我们可以发现特征值最小的那个，可能是质量太低，大多数序列被除掉了
+   
+   
+   86  #构建多样性分析所需要的进化树
+   90  mkdir 3_phylogenetic
+   87  #获取参考数据
+   88  wget -c   -O "sepp-refs-gg-13-8.qza"   "https://data.qiime2.org/2020.2/common/sepp-refs-gg-13-8.qza"
+   89  #通过设置--p-threads参数可以配置多线程并行运算，加速计算速度
+   91  #查看电脑有多少个线程，可以重开一个终端并输入以下代码
+   92  # sudo grep 'processor' /proc/cpuinfo |sort -u | wc -l
+   93  #我的电脑是8个线程的，下面将使用8线程运算   
+   94  time qiime fragment-insertion sepp --i-representative-sequences 2_QC/dada2_rep_set.qza --i-reference-database sepp-refs-gg-13-8.qza --o-tree 3_phylogenetic/tree.qza --o-placements 3_phylogenetic/tree_placements.qza --p-threads 8
+   95  #tree_placement.qza是插值法的树文件，tree.qza是树文件
+
+   96  #Alpha稀疏和深度选择
+   97  mkdir 4_alpha_index
+   98  #选择一个测序深度，在每个采样深度，通常计算10个稀疏表以提供误差估计。另外取4250来作为最大的深度
+  106  qiime diversity alpha-rarefaction --i-table 2_QC/dada2_table.qza --m-metadata-file metadata.tsv --o-visualization 4_alpha_index/alpha_rarefaction_curves.qzv --p-min-depth 10 --p-max-depth 4250
+
+  100  #多样性分析
+  107  qiime diversity core-metrics-phylogenetic --i-table 2_QC/dada2_table.qza --i-phylogeny 3_phylogenetic/tree.qza --m-metadata-file metadata.tsv --p-sampling-depth 2000 --output-dir 5_core-metrics-results
+
+  103  #Alpha多样性查询样本(样本间)中的特征分布是否在不同条件之间不同
+  108  qiime diversity alpha-group-significance --i-alpha-diversity 5_core-metrics-results/faith_pd_vector.qza --m-metadata-file metadata.tsv --o-visualization 5_core-metrics-results/faith_pd_statistics.qzv
+  109  qiime diversity alpha-group-significance --i-alpha-diversity 5_core-metrics-results/evenness_vector.qza --m-metadata-file metadata.tsv --o-visualization 5_core-metrics-results/evenness_statistics.qzv
+  110  #faiths_pd_statistics：faiths_pd 指数按元数据的统计可视化；evenness_statistics, 均匀度指数按元数据的统计可视化
+  111  #基因型之间的均匀性是否存在差异？基因型之间的系统发育多样性是否存在差异？
+  112  #查看evenness_statistics.qzv，列名column选genotype，观察图形差异不明显，下方的p值也不显著
+  113  #同样观察faiths_ph_statistics.qzv，p值也不显著，切换到donor分组，差异显著。
+  
+  
+  114  #如果a多样性估计遵循正态分布，可以使用ANOVA方差分析来测试多重效应是否显著影响a多样性
+  115  qiime longitudinal anova --m-metadata-file 5_core-metrics-results/faith_pd_vector.qza --m-metadata-file metadata.tsv --p-formula 'faith_pd ~ genotype*donor_status' --o-visualization 5_core-metrics-results/faith_pd_anova.qzv
+
+  117  #要看样本组间距离是否比样本组内的距离大，从而判断两组样本是否不同。需要使用beta多样性分析
+  121  qiime diversity beta-group-significance --i-distance-matrix 5_core-metrics-results/unweighted_unifrac_distance_matrix.qza --m-metadata-file metadata.tsv --m-metadata-column donor --o-visualization 5_core-metrics-results/unweighted_unifrac_donor-significance.qzv
+  122  qiime diversity beta-group-significance --i-distance-matrix 5_core-metrics-results/weighted_unifrac_distance_matrix.qza --m-metadata-file metadata.tsv --m-metadata-column donor --o-visualization 5_core-metrics-results/weighted_unifrac_donor-significance.qzv
+
+  124  #分析小鼠所在的笼子与beta多样性之间是否存在关系，因为笼子效应通常是一个需要考虑的重要技术效果。 
+  123  qiime diversity beta-group-significance --i-distance-matrix 5_core-metrics-results/unweighted_unifrac_distance_matrix.qza --m-metadata-file metadata.tsv --m-metadata-column cage_id --o-visualization 5_core-metrics-results/unweighted_unifrac_cage-significance.qzv --p-pairwise
+  125  qiime diversity beta-group-significance --i-distance-matrix 5_core-metrics-results/weighted_unifrac_distance_matrix.qza --m-metadata-file metadata.tsv --m-metadata-column cage_id --o-visualization 5_core-metrics-results/weighted_unifrac_cage-significance.qzv --p-pairwise
+  126  #通过分析发现，很多笼子间有显著区别，这是一个小鼠实验中常见的混淆因子，要严格注意防止下错误结论
+  127  #我们发现捐赠者之间，p值为0.001，具有显著性差异。而在case差异性分析中，C31和C35之间无显著差异，C31与C43之间有显著差异
+
+  128  #检查笼子相关的差异是否是由于笼内较大差异造成的
+  130  qiime diversity beta-group-significance --i-distance-matrix 5_core-metrics-results/weighted_unifrac_distance_matrix.qza --m-metadata-file metadata.tsv --m-metadata-column cage_id --o-visualization 5_core-metrics-results/unweighted_unifrac_cage_significance_disp.qzv --p-method permdisp
+  
+  131  #使用adonis动作来查看多变量模型，使用的是PERMANOVA检验，但是允许同时检验多种效应。
+  132  #查看供体和基因型之间的交集
+  133  qiime diversity adonis --i-distance-matrix 5_core-metrics-results/unweighted_unifrac_distance_matrix.qza --m-metadata-file metadata.tsv --o-visualization 5_core-metrics-results/unweighted_adonis.qzv --p-formula genotype+donor
+
+  134  #物种注释
+  135  #下载使用moving picture教程中的注释信息文件
+  136  qiime feature-classifier classify-sklearn --i-reads 2_QC/dada2_rep_set.qza --i-classifier gg-13-8-99-515-806-nb-classifier.qza --o-classification 6_taxonomy/taxonomy.qza
+  137  mkdir 6_taxonomy2
+  138  #将物种注释表格可视化
+  139  qiime metadata tabulate --m-input-file 6_taxonomy/taxonomy.qza --o-visualization 6_taxonomy/taxonomy.qzv
+  140  #对代表性序列制成表格，方便查看分配给标识符的序列，并以NCBI数据库的形式交互式地对序列进行比对查询
+  141  qiime feature-table tabulate-seqs --i-data 2_QC/dada2_rep_set.qza --o-visualization 2_QC/dada2_rep_set.qzv
+       #物种组成柱状图
+   149  #先筛掉比稀疏阈值2000更少特征的任何样本
+  150  qiime feature-table filter-samples --i-table 2_QC/dada2_table.qza --p-min-frequency 2000 --o-filtered-table 6_taxonomy/table_2k.qza
+  151  #使用过滤后的表格构建交互式条性图
+  152  qiime taxa barplot --i-table 6_taxonomy/table_2k.qza --i-taxonomy 6_taxonomy/taxonomy.qza --m-metadata-file metadata.tsv --o-visualization 6_taxonomy/taxa_barplot.qzv      
+       
+       
+  142  #使用q2-taxa插件可以将物种从属关系折叠collapse到指定的级别
+  146  #按尝试按属折叠并制表可视化 
+  144  qiime taxa collapse --i-table 2_QC/dada2_table.qza --i-taxonomy 6_taxonomy/taxonomy.qza --p-level 6 --o-collapsed-table 6_taxonomy/table-l6.qza
+  145  qiime metadata tabulate --m-input-file 6_taxonomy/table-l6.qza --o-visualization 6_taxonomy/table-l6.qzv
+
+
+
+  153  #ANCOM差异丰度分析
+  154  #筛选最小频率为50，至少在4个样品中出现的特征
+  156  qiime feature-table filter-features --i-table 6_taxonomy/table_2k.qza --p-min-frequency 50 --p-min-samples 4 --o-filtered-table 6_taxonomy/table_2k_abund.qza
+  
+  157  #ANCOM不能容忍零，因此加一个伪计数
+  159  qiime composition add-pseudocount --i-table 6_taxonomy/table_2k_abund.qza --o-composition-table 6_taxonomy/table2k_abund_comp.qza
+  
+  160  #使用ANCOM检查基于供体的小鼠是否存在差异，然后检查它们的遗传背景。该检验将计算采用FDR校正的p<0.05显著不同的ASV对之间的比率数
+  162  qiime composition ancom --i-table 6_taxonomy/table2k_abund_comp.qza --m-metadata-file metadata.tsv --m-metadata-column donor --o-visualization 6_taxonomy/ancom_donor.qzv
+  163  qiime composition ancom --i-table 6_taxonomy/table2k_abund_comp.qza --m-metadata-file metadata.tsv --m-metadata-column genotype --o-visualization 6_taxonomy/ancom_genotype.qzv
+  
+
+  165  #纵向分析
+  166  #基于PCoA的分析
+  167  #绘制波动率图，指定状态列为时间，个体列为小鼠，分组列为供体状态
+  170  qiime longitudinal volatility --m-metadata-file metadata.tsv --m-metadata-file 5_core-metrics-results/unweighted_unifrac_pcoa_results.qza --p-state-column days_post_transplant --p-individual-id-column mouse_id --p-default-group-column 'donor_status' --p-default-metric 'Axis 2' --o-visualization 5_core-metrics-results/pc_vol.qzv
+  
+  171  #基于距离的分析，假设基因型会影响小鼠收集的样本随时间的距离变化幅度。此处观察每只小鼠的微生物群落7天后的变化开始分析
+  173  qiime longitudinal first-distances --i-distance-matrix 5_core-metrics-results/unweighted_unifrac_distance_matrix.qza --m-metadata-file metadata.tsv --p-state-column days_post_transplant --p-individual-id-column mouse_id --p-baseline 7 --o-first-distances 5_core-metrics-results/from_first_unifrac.qzv
+  
+  
+  174  #再次使用波动率分析来根据距离可视化beta多样性的变化
+  175  qiime longitudinal volatility --m-metadata-file metadata.tsv --m-metadata-file 5_core-metrics-results/from_first_unifrac.qzv.qza --p-state-column days_post_transplant --p-individual-id-column mouse_id --p-default-metric Distance --p-default-group-column 'donor_status' --o-visualization 5_core-metrics-results/from_first_unifrac_vol.qzv
+
